@@ -12,6 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 const HISTORY_FILE = path.join(__dirname, "history.json");
+const USERS_FILE = path.join(__dirname, "users.json");
 
 const activationQueue = [];
 let isProcessingQueue = false;
@@ -39,9 +40,94 @@ app.get("/history", (req, res) => {
     history
   });
 });
+app.get("/history", (req, res) => {
+  const history = loadHistory();
 
+  res.json({
+    success: true,
+    history
+  });
+});
+
+app.get("/history/export", (req, res) => {
+  const history = loadHistory();
+
+  const headers = [
+    "id",
+    "dsn",
+    "user",
+    "type",
+    "status",
+    "createdAt",
+    "startedAt",
+    "finishedAt",
+    "error"
+  ];
+
+  const rows = history.map((item) =>
+    [
+      item.id,
+      item.dsn,
+      item.user,
+      item.type,
+      item.status,
+      item.createdAt,
+      item.startedAt,
+      item.finishedAt,
+      item.error
+    ]
+      .map(escapeCsv)
+      .join(",")
+  );
+
+  const csv = [headers.join(","), ...rows].join("\n");
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", 'attachment; filename="orbcomm-history.csv"');
+  res.send(csv);
+});
+app.post("/login", (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Username and password are required"
+    });
+  }
+
+  const normalizedUsername = String(username).trim().toLowerCase();
+  const normalizedPassword = String(password).trim();
+
+  const users = loadUsers();
+
+  console.log("USERS_FILE:", USERS_FILE);
+  console.log("Loaded usernames:", users.map((u) => u.username));
+
+  const matchedUser = users.find((user) => {
+    return (
+      String(user.username).trim().toLowerCase() === normalizedUsername &&
+      String(user.password).trim() === normalizedPassword
+    );
+  });
+
+  if (!matchedUser) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid username or password"
+    });
+  }
+
+  res.json({
+    success: true,
+    user: {
+      username: matchedUser.username,
+      fullName: matchedUser.fullName
+    }
+  });
+});
 app.post("/queue/activate", (req, res) => {
-  const { dsn } = req.body;
+  const { dsn, user } = req.body;
 
   if (!dsn) {
     return res.status(400).json({
@@ -50,11 +136,19 @@ app.post("/queue/activate", (req, res) => {
     });
   }
 
+  if (!user) {
+    return res.status(400).json({
+      success: false,
+      message: "User is required"
+    });
+  }
+
   const normalizedDsn = String(dsn).trim().toUpperCase();
 
   const existingJob = activationQueue.find(
     (job) =>
       job.dsn === normalizedDsn &&
+      job.type === "activate" &&
       (job.status === "queued" || job.status === "running")
   );
 
@@ -69,6 +163,7 @@ app.post("/queue/activate", (req, res) => {
   const job = {
     id: nextJobId++,
     dsn: normalizedDsn,
+    user,
     type: "activate",
     status: "queued",
     createdAt: new Date().toISOString(),
@@ -88,12 +183,19 @@ app.post("/queue/activate", (req, res) => {
 });
 
 app.post("/queue/deactivate", (req, res) => {
-  const { dsn } = req.body;
+  const { dsn, user } = req.body;
 
   if (!dsn) {
     return res.status(400).json({
       success: false,
       message: "DSN is required"
+    });
+  }
+
+  if (!user) {
+    return res.status(400).json({
+      success: false,
+      message: "User is required"
     });
   }
 
@@ -117,6 +219,7 @@ app.post("/queue/deactivate", (req, res) => {
   const job = {
     id: nextJobId++,
     dsn: normalizedDsn,
+    user,
     type: "deactivate",
     status: "queued",
     createdAt: new Date().toISOString(),
@@ -151,6 +254,20 @@ function cleanupOldJobs() {
   }
 }
 
+function loadUsers() {
+  try {
+    if (!fs.existsSync(USERS_FILE)) {
+      return [];
+    }
+
+    const data = fs.readFileSync(USERS_FILE, "utf8");
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Could not read users file:", err);
+    return [];
+  }
+}
+
 function loadHistory() {
   try {
     if (!fs.existsSync(HISTORY_FILE)) {
@@ -172,13 +289,13 @@ function saveHistory(history) {
     console.error("Could not write history file:", err);
   }
 }
-
 function appendHistory(job) {
   const history = loadHistory();
 
   history.push({
     id: job.id,
     dsn: job.dsn,
+    user: job.user,
     type: job.type,
     status: job.status,
     createdAt: job.createdAt,
@@ -190,6 +307,20 @@ function appendHistory(job) {
   saveHistory(history);
 }
 
+function escapeCsv(value) {
+  if (value === null || value === undefined) return "";
+  const stringValue = String(value);
+
+  if (
+    stringValue.includes(",") ||
+    stringValue.includes('"') ||
+    stringValue.includes("\n")
+  ) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+}
 async function processQueue() {
   if (isProcessingQueue) return;
 
@@ -203,26 +334,26 @@ async function processQueue() {
       nextJob.status = "running";
       nextJob.startedAt = new Date().toISOString();
 
-      console.log(`Processing activation job ${nextJob.id} for ${nextJob.dsn}`);
+      console.log(`Processing ${nextJob.type} job ${nextJob.id} for ${nextJob.dsn} by ${nextJob.user}`);
 
       try {
         if (nextJob.type === "activate") {
-  await activateOrbcommDevice(nextJob.dsn);
-} else if (nextJob.type === "deactivate") {
-  await deactivateOrbcommDevice(nextJob.dsn);
-} else {
-  throw new Error(`Unsupported job type: ${nextJob.type}`);
-}
+          await activateOrbcommDevice(nextJob.dsn);
+        } else if (nextJob.type === "deactivate") {
+          await deactivateOrbcommDevice(nextJob.dsn);
+        } else {
+          throw new Error(`Unsupported job type: ${nextJob.type}`);
+        }
 
         nextJob.status = "done";
         nextJob.finishedAt = new Date().toISOString();
 
         appendHistory(nextJob);
 
-        console.log(`Activation job ${nextJob.id} completed`);
+        console.log(`${nextJob.type} job ${nextJob.id} completed`);
         cleanupOldJobs();
       } catch (error) {
-        console.error(`Activation job ${nextJob.id} failed:`, error);
+        console.error(`${nextJob.type} job ${nextJob.id} failed:`, error);
 
         nextJob.status = "failed";
         nextJob.finishedAt = new Date().toISOString();
@@ -238,7 +369,7 @@ async function processQueue() {
   }
 }
 
-console.log("QUEUE VERSION OF SERVER.JS LOADED");
+console.log("QUEUE + LOGIN VERSION OF SERVER.JS LOADED");
 
 app.listen(3001, "0.0.0.0", () => {
   console.log("Server running on port 3001");
