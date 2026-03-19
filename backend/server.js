@@ -255,30 +255,31 @@ function cleanupOldJobs() {
 }
 
 function loadUsers() {
-  try {
-    const users = [];
+  const users = [];
 
-    if (process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
+  function addUser(prefix) {
+    const username = process.env[`${prefix}_USERNAME`];
+    const password = process.env[`${prefix}_PASSWORD`];
+    const name = process.env[`${prefix}_NAME`];
+
+    if (username && password) {
       users.push({
-        username: process.env.ADMIN_USERNAME,
-        password: process.env.ADMIN_PASSWORD,
-        fullName: process.env.ADMIN_FULL_NAME || process.env.ADMIN_USERNAME
+        username,
+        password,
+        fullName: name || username
       });
     }
-
-    if (fs.existsSync(USERS_FILE)) {
-      const data = fs.readFileSync(USERS_FILE, "utf8");
-      const fileUsers = JSON.parse(data);
-      if (Array.isArray(fileUsers)) {
-        users.push(...fileUsers);
-      }
-    }
-
-    return users;
-  } catch (err) {
-    console.error("Could not read users file:", err);
-    return [];
   }
+
+  // Admin
+  addUser("ADMIN");
+
+  // Techs 1–10
+  for (let i = 1; i <= 10; i++) {
+    addUser(`TECH${i}`);
+  }
+
+  return users;
 }
 
 function loadHistory() {
