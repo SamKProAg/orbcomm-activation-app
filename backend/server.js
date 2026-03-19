@@ -256,12 +256,25 @@ function cleanupOldJobs() {
 
 function loadUsers() {
   try {
-    if (!fs.existsSync(USERS_FILE)) {
-      return [];
+    const users = [];
+
+    if (process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
+      users.push({
+        username: process.env.ADMIN_USERNAME,
+        password: process.env.ADMIN_PASSWORD,
+        fullName: process.env.ADMIN_FULL_NAME || process.env.ADMIN_USERNAME
+      });
     }
 
-    const data = fs.readFileSync(USERS_FILE, "utf8");
-    return JSON.parse(data);
+    if (fs.existsSync(USERS_FILE)) {
+      const data = fs.readFileSync(USERS_FILE, "utf8");
+      const fileUsers = JSON.parse(data);
+      if (Array.isArray(fileUsers)) {
+        users.push(...fileUsers);
+      }
+    }
+
+    return users;
   } catch (err) {
     console.error("Could not read users file:", err);
     return [];
