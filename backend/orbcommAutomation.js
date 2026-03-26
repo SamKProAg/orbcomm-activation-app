@@ -3,22 +3,40 @@ const { chromium } = require("playwright");
 async function activateOrbcommDevice(dsn) {
   console.log("Starting ORBCOMM automation for:", dsn);
 
-  const { chromium } = require('playwright');
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--disable-setuid-sandbox']
-});
-  const page = await browser.newPage();
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    viewport: { width: 1440, height: 900 }
+  });
+
+  const page = await context.newPage();
 
   try {
-    await page.goto("https://partner-support.orbcomm.com/", {
+    const response = await page.goto("https://partner-support.orbcomm.com/", {
       waitUntil: "domcontentloaded",
       timeout: 30000
     });
 
-    console.log("Opened page:", await page.url());
+    console.log("Opened page:", page.url());
     console.log("Page title:", await page.title());
+    console.log("HTTP status:", response ? response.status() : "no response");
+
+    const bodyText = (await page.textContent("body").catch(() => "")) || "";
+    console.log("Page body preview:", bodyText.slice(0, 500));
+
+    if (response && response.status() === 403) {
+      throw new Error(
+        "ORBCOMM returned 403 Forbidden before login page loaded. This usually means the site is blocking the Render server or this URL is not the correct login page."
+      );
+    }
+
+    await page.waitForSelector('input[type="email"]', { timeout: 15000 });
+    await page.waitForSelector('input[type="password"]', { timeout: 15000 });
 
     await page.fill('input[type="email"]', process.env.ORBCOMM_USER);
     await page.fill('input[type="password"]', process.env.ORBCOMM_PASS);
@@ -28,16 +46,13 @@ const browser = await chromium.launch({
 
     await page.waitForTimeout(3000);
 
-    // Handle the Solution Provider popup if it appears
     const providerText = "SP: 123253: Professional Ag Services 25KB individual IDP";
     const providerOption = page.getByText(providerText, { exact: true });
 
     if (await providerOption.count()) {
       console.log("Found solution provider picker, selecting correct provider");
       await providerOption.click();
-
-     await page.locator("#btnModal_Login").click();
-
+      await page.locator("#btnModal_Login").click();
       await page.waitForTimeout(4000);
     }
 
@@ -46,94 +61,85 @@ const browser = await chromium.launch({
     console.log("URL after provider selection:", await page.url());
     console.log("Title after provider selection:", await page.title());
 
-    // Step 1: open Gateways & Devices
-await page.locator('a.side-nav-link.supportMenu[href="/Terminals/Index"]').click();
-await page.waitForTimeout(3000);
+    await page.locator('a.side-nav-link.supportMenu[href="/Terminals/Index"]').click();
+    await page.waitForTimeout(3000);
 
-await page.screenshot({ path: "debug-gateways-page.png", fullPage: true });
-console.log("Saved screenshot: debug-gateways-page.png");
+    await page.screenshot({ path: "debug-gateways-page.png", fullPage: true });
+    console.log("Saved screenshot: debug-gateways-page.png");
 
-// Step 2: click Device Provisioning button
-await page.getByRole("button", { name: /Device Provisioning/i }).click();
-await page.waitForTimeout(2000);
+    await page.getByRole("button", { name: /Device Provisioning/i }).click();
+    await page.waitForTimeout(2000);
 
-await page.screenshot({ path: "debug-provisioning-modal.png", fullPage: true });
-console.log("Saved screenshot: debug-provisioning-modal.png");
+    await page.screenshot({ path: "debug-provisioning-modal.png", fullPage: true });
+    console.log("Saved screenshot: debug-provisioning-modal.png");
 
-// Step 3: choose Device Activations radio button
-await page.getByLabel(/Device Activations/i).check();
-await page.waitForTimeout(500);
+    await page.getByLabel(/Device Activations/i).check();
+    await page.waitForTimeout(500);
 
-// Step 4: click Next
-await page.getByRole("button", { name: /^Next$/i }).click();
-await page.waitForTimeout(3000);
+    await page.getByRole("button", { name: /^Next$/i }).click();
+    await page.waitForTimeout(3000);
 
-await page.screenshot({ path: "debug-device-activations-page.png", fullPage: true });
-console.log("Saved screenshot: debug-device-activations-page.png");
-console.log("Activation page URL:", await page.url());
-console.log("Activation page title:", await page.title());
+    await page.screenshot({ path: "debug-device-activations-page.png", fullPage: true });
+    console.log("Saved screenshot: debug-device-activations-page.png");
+    console.log("Activation page URL:", await page.url());
+    console.log("Activation page title:", await page.title());
 
-// Step 5: fill Device Serial #s
-let filled = false;
+    let filled = false;
 
-const textareaCount = await page.locator("textarea").count();
-if (textareaCount > 0) {
-  await page.locator("textarea").first().fill(dsn);
-  filled = true;
-}
-
-if (!filled) {
-  const textInputCount = await page.locator('input[type="text"]').count();
-  if (textInputCount > 0) {
-    await page.locator('input[type="text"]').first().fill(dsn);
-    filled = true;
-  }
-}
-
-if (!filled) {
-  throw new Error("Could not find DSN input field on activation page.");
-}
-
-console.log("Filled DSN:", dsn);
-
-// Try selecting Gateway Account if a dropdown is present
-const gatewaySelect = page.locator("select").first();
-if (await gatewaySelect.count()) {
-  const options = await gatewaySelect.locator("option").count();
-  if (options > 1) {
-    // choose the first non-empty option
-    const value = await gatewaySelect.locator("option").nth(1).getAttribute("value");
-    if (value) {
-      await gatewaySelect.selectOption(value);
-      console.log("Selected gateway account");
-      await page.waitForTimeout(1000);
+    const textareaCount = await page.locator("textarea").count();
+    if (textareaCount > 0) {
+      await page.locator("textarea").first().fill(dsn);
+      filled = true;
     }
-  }
-}
 
-// Click Add Device if present
-const addDeviceButton = page.getByRole("button", { name: /Add Device/i });
-if (await addDeviceButton.count()) {
-  await addDeviceButton.click();
-  console.log("Clicked Add Device");
-  await page.waitForTimeout(2000);
-}
+    if (!filled) {
+      const textInputCount = await page.locator('input[type="text"]').count();
+      if (textInputCount > 0) {
+        await page.locator('input[type="text"]').first().fill(dsn);
+        filled = true;
+      }
+    }
 
-// Optional: make sure notification email is filled
-const emailInputs = page.locator('input[type="text"], input[type="email"]');
-const count = await emailInputs.count();
-if (count > 0) {
-  const lastInput = emailInputs.nth(count - 1);
-  await lastInput.fill(process.env.ORBCOMM_USER);
-  console.log("Filled notification email");
-  await page.waitForTimeout(500);
-}
+    if (!filled) {
+      throw new Error("Could not find DSN input field on activation page.");
+    }
 
-await page.screenshot({ path: "debug-before-submit.png", fullPage: true });
-console.log("Saved screenshot: debug-before-submit.png");
+    console.log("Filled DSN:", dsn);
 
-// Submit activation
-await page.locator("#btnSubmit").click();    await page.waitForTimeout(4000);
+    const gatewaySelect = page.locator("select").first();
+    if (await gatewaySelect.count()) {
+      const options = await gatewaySelect.locator("option").count();
+      if (options > 1) {
+        const value = await gatewaySelect.locator("option").nth(1).getAttribute("value");
+        if (value) {
+          await gatewaySelect.selectOption(value);
+          console.log("Selected gateway account");
+          await page.waitForTimeout(1000);
+        }
+      }
+    }
+
+    const addDeviceButton = page.getByRole("button", { name: /Add Device/i });
+    if (await addDeviceButton.count()) {
+      await addDeviceButton.click();
+      console.log("Clicked Add Device");
+      await page.waitForTimeout(2000);
+    }
+
+    const emailInputs = page.locator('input[type="text"], input[type="email"]');
+    const emailInputCount = await emailInputs.count();
+    if (emailInputCount > 0) {
+      const lastInput = emailInputs.nth(emailInputCount - 1);
+      await lastInput.fill(process.env.ORBCOMM_USER);
+      console.log("Filled notification email");
+      await page.waitForTimeout(500);
+    }
+
+    await page.screenshot({ path: "debug-before-submit.png", fullPage: true });
+    console.log("Saved screenshot: debug-before-submit.png");
+
+    await page.locator("#btnSubmit").click();
+    await page.waitForTimeout(4000);
 
     await page.screenshot({ path: "debug-after-submit.png", fullPage: true });
     console.log("Activation submitted:", dsn);
@@ -142,26 +148,48 @@ await page.locator("#btnSubmit").click();    await page.waitForTimeout(4000);
     await page.screenshot({ path: "debug-error.png", fullPage: true }).catch(() => {});
     throw err;
   } finally {
+    await context.close().catch(() => {});
     await browser.close();
   }
 }
 
-module.exports = { activateOrbcommDevice, deactivateOrbcommDevice };
-
 async function deactivateOrbcommDevice(dsn) {
   console.log("Starting ORBCOMM deactivation for:", dsn);
 
-  const browser = await chromium.launch({ headless: false });
-  const page = await browser.newPage();
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
+
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    viewport: { width: 1440, height: 900 }
+  });
+
+  const page = await context.newPage();
 
   try {
-    await page.goto("https://partner-support.orbcomm.com/", {
+    const response = await page.goto("https://partner-support.orbcomm.com/", {
       waitUntil: "domcontentloaded",
       timeout: 30000
     });
 
-    console.log("Opened page:", await page.url());
+    console.log("Opened page:", page.url());
     console.log("Page title:", await page.title());
+    console.log("HTTP status:", response ? response.status() : "no response");
+
+    const bodyText = (await page.textContent("body").catch(() => "")) || "";
+    console.log("Page body preview:", bodyText.slice(0, 500));
+
+    if (response && response.status() === 403) {
+      throw new Error(
+        "ORBCOMM returned 403 Forbidden before login page loaded. This usually means the site is blocking the Render server or this URL is not the correct login page."
+      );
+    }
+
+    await page.waitForSelector('input[type="email"]', { timeout: 15000 });
+    await page.waitForSelector('input[type="password"]', { timeout: 15000 });
 
     await page.fill('input[type="email"]', process.env.ORBCOMM_USER);
     await page.fill('input[type="password"]', process.env.ORBCOMM_PASS);
@@ -239,9 +267,9 @@ async function deactivateOrbcommDevice(dsn) {
     }
 
     const emailInputs = page.locator('input[type="email"], input[type="text"]');
-    const count = await emailInputs.count();
-    if (count > 0) {
-      const lastInput = emailInputs.nth(count - 1);
+    const emailInputCount = await emailInputs.count();
+    if (emailInputCount > 0) {
+      const lastInput = emailInputs.nth(emailInputCount - 1);
       await lastInput.fill(process.env.ORBCOMM_USER);
       console.log("Filled notification email");
       await page.waitForTimeout(500);
@@ -260,6 +288,9 @@ async function deactivateOrbcommDevice(dsn) {
     await page.screenshot({ path: "debug-error-deactivate.png", fullPage: true }).catch(() => {});
     throw err;
   } finally {
+    await context.close().catch(() => {});
     await browser.close();
   }
 }
+
+module.exports = { activateOrbcommDevice, deactivateOrbcommDevice };
