@@ -3,7 +3,12 @@ const { chromium } = require("playwright");
 async function activateOrbcommDevice(dsn) {
   console.log("Starting ORBCOMM automation for:", dsn);
 
-  const browser = await chromium.launch({ headless: false });
+  const { chromium } = require('playwright');
+
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
+});
   const page = await browser.newPage();
 
   try {
