@@ -4,8 +4,6 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 
-const { activateOrbcommDevice, deactivateOrbcommDevice } = require("./orbcommAutomation");
-
 const app = express();
 
 app.use(cors());
@@ -15,9 +13,30 @@ const HISTORY_FILE = path.join(__dirname, "history.json");
 const USERS_FILE = path.join(__dirname, "users.json");
 
 const activationQueue = [];
-let isProcessingQueue = false;
 let nextJobId = 1;
 const COMPLETED_JOB_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function requireWorkerAuth(req, res, next) {
+  const workerSecret = process.env.WORKER_SECRET;
+
+  if (!workerSecret) {
+    return res.status(500).json({
+      success: false,
+      message: "WORKER_SECRET is not configured on server"
+    });
+  }
+
+  const providedSecret = req.headers["x-worker-secret"];
+
+  if (providedSecret !== workerSecret) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized worker"
+    });
+  }
+
+  next();
+}
 
 app.get("/", (req, res) => {
   res.send("ORBCOMM Activation Server Running");
@@ -32,14 +51,6 @@ app.get("/queue", (req, res) => {
   });
 });
 
-app.get("/history", (req, res) => {
-  const history = loadHistory();
-
-  res.json({
-    success: true,
-    history
-  });
-});
 app.get("/history", (req, res) => {
   const history = loadHistory();
 
@@ -86,6 +97,7 @@ app.get("/history/export", (req, res) => {
   res.setHeader("Content-Disposition", 'attachment; filename="orbcomm-history.csv"');
   res.send(csv);
 });
+
 app.post("/login", (req, res) => {
   const { username, password } = req.body;
 
@@ -126,6 +138,7 @@ app.post("/login", (req, res) => {
     }
   });
 });
+
 app.post("/queue/activate", (req, res) => {
   const { dsn, user } = req.body;
 
@@ -173,7 +186,6 @@ app.post("/queue/activate", (req, res) => {
   };
 
   activationQueue.push(job);
-  processQueue().catch((err) => console.error("Queue processor error:", err));
 
   res.json({
     success: true,
@@ -229,12 +241,93 @@ app.post("/queue/deactivate", (req, res) => {
   };
 
   activationQueue.push(job);
-  processQueue().catch((err) => console.error("Queue processor error:", err));
 
   res.json({
     success: true,
     message: "Deactivation queued",
     job
+  });
+});
+
+app.get("/worker/next-job", requireWorkerAuth, (req, res) => {
+  cleanupOldJobs();
+
+  const nextJob = activationQueue.find((job) => job.status === "queued");
+
+  if (!nextJob) {
+    return res.json({
+      success: true,
+      job: null
+    });
+  }
+
+  nextJob.status = "running";
+  nextJob.startedAt = new Date().toISOString();
+
+  console.log(
+    `Worker claimed ${nextJob.type} job ${nextJob.id} for ${nextJob.dsn} by ${nextJob.user}`
+  );
+
+  res.json({
+    success: true,
+    job: nextJob
+  });
+});
+
+app.post("/worker/job-result", requireWorkerAuth, (req, res) => {
+  const { jobId, status, error } = req.body;
+
+  const job = activationQueue.find((item) => item.id === jobId);
+
+  if (!job) {
+    return res.status(404).json({
+      success: false,
+      message: "Job not found"
+    });
+  }
+
+  if (job.status !== "running") {
+    return res.status(409).json({
+      success: false,
+      message: `Job is not running. Current status: ${job.status}`
+    });
+  }
+
+  job.finishedAt = new Date().toISOString();
+
+  if (status === "done") {
+    job.status = "done";
+    job.error = null;
+    appendHistory(job);
+    cleanupOldJobs();
+
+    console.log(`${job.type} job ${job.id} completed by worker`);
+
+    return res.json({
+      success: true,
+      message: "Job marked done",
+      job
+    });
+  }
+
+  if (status === "failed") {
+    job.status = "failed";
+    job.error = error || "Unknown error";
+    appendHistory(job);
+    cleanupOldJobs();
+
+    console.log(`${job.type} job ${job.id} failed by worker: ${job.error}`);
+
+    return res.json({
+      success: true,
+      message: "Job marked failed",
+      job
+    });
+  }
+
+  return res.status(400).json({
+    success: false,
+    message: "Status must be 'done' or 'failed'"
   });
 });
 
@@ -271,10 +364,8 @@ function loadUsers() {
     }
   }
 
-  // Admin
   addUser("ADMIN");
 
-  // Techs 1–10
   for (let i = 1; i <= 10; i++) {
     addUser(`TECH${i}`);
   }
@@ -303,6 +394,7 @@ function saveHistory(history) {
     console.error("Could not write history file:", err);
   }
 }
+
 function appendHistory(job) {
   const history = loadHistory();
 
@@ -334,53 +426,6 @@ function escapeCsv(value) {
   }
 
   return stringValue;
-}
-async function processQueue() {
-  if (isProcessingQueue) return;
-
-  isProcessingQueue = true;
-
-  try {
-    while (true) {
-      const nextJob = activationQueue.find((job) => job.status === "queued");
-      if (!nextJob) break;
-
-      nextJob.status = "running";
-      nextJob.startedAt = new Date().toISOString();
-
-      console.log(`Processing ${nextJob.type} job ${nextJob.id} for ${nextJob.dsn} by ${nextJob.user}`);
-
-      try {
-        if (nextJob.type === "activate") {
-          await activateOrbcommDevice(nextJob.dsn);
-        } else if (nextJob.type === "deactivate") {
-          await deactivateOrbcommDevice(nextJob.dsn);
-        } else {
-          throw new Error(`Unsupported job type: ${nextJob.type}`);
-        }
-
-        nextJob.status = "done";
-        nextJob.finishedAt = new Date().toISOString();
-
-        appendHistory(nextJob);
-
-        console.log(`${nextJob.type} job ${nextJob.id} completed`);
-        cleanupOldJobs();
-      } catch (error) {
-        console.error(`${nextJob.type} job ${nextJob.id} failed:`, error);
-
-        nextJob.status = "failed";
-        nextJob.finishedAt = new Date().toISOString();
-        nextJob.error = error.message || "Unknown error";
-
-        appendHistory(nextJob);
-
-        cleanupOldJobs();
-      }
-    }
-  } finally {
-    isProcessingQueue = false;
-  }
 }
 
 console.log("QUEUE + LOGIN VERSION OF SERVER.JS LOADED");
