@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
+console.log("API_BASE =", API_BASE);
 
 function App() {
   const [dsn, setDsn] = useState("");
@@ -17,6 +18,8 @@ function App() {
   });
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [orbcommUsername, setOrbcommUsername] = useState("");
+  const [orbcommPassword, setOrbcommPassword] = useState("");
   const [toast, setToast] = useState(null);
   const [lastScan, setLastScan] = useState("");
   const inputRef = useRef(null);
@@ -27,6 +30,7 @@ function App() {
     inputRef.current?.focus();
     loadQueue();
     loadHistory();
+    loadSavedOrbcommCreds(user.username);
 
     const interval = setInterval(() => {
       loadQueue();
@@ -35,6 +39,36 @@ function App() {
 
     return () => clearInterval(interval);
   }, [user]);
+
+  function getSavedCredsMap() {
+    try {
+      return JSON.parse(localStorage.getItem("orbcommCredsByAppUser") || "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  function saveOrbcommCredsForUser(appUsername, orbUser, orbPass) {
+    const credsMap = getSavedCredsMap();
+    credsMap[appUsername] = {
+      orbcommUsername: orbUser,
+      orbcommPassword: orbPass
+    };
+    localStorage.setItem("orbcommCredsByAppUser", JSON.stringify(credsMap));
+  }
+
+  function loadSavedOrbcommCreds(appUsername) {
+    const credsMap = getSavedCredsMap();
+    const saved = credsMap[appUsername];
+
+    if (saved) {
+      setOrbcommUsername(saved.orbcommUsername || "");
+      setOrbcommPassword(saved.orbcommPassword || "");
+    } else {
+      setOrbcommUsername("");
+      setOrbcommPassword("");
+    }
+  }
 
   function normalizeDsn(value) {
     return String(value || "").trim().toUpperCase();
@@ -96,12 +130,12 @@ function App() {
   }
 
   function showToast(message, type = "success") {
-  setToast({ message, type });
+    setToast({ message, type });
 
-  setTimeout(() => {
-    setToast(null);
-  }, 2000);
-}
+    setTimeout(() => {
+      setToast(null);
+    }, 2000);
+  }
 
   async function login() {
     try {
@@ -121,7 +155,7 @@ function App() {
       const data = await response.json();
 
       if (!response.ok) {
-       showToast(data.message || "Login failed.", "error");
+        showToast(data.message || "Login failed.", "error");
         playErrorSound();
         return;
       }
@@ -134,7 +168,7 @@ function App() {
       playSuccessSound();
     } catch (error) {
       console.error(error);
-     showToast("Could not reach the server.", "error");
+      showToast("Could not reach the server.", "error");
       playErrorSound();
     }
   }
@@ -142,10 +176,12 @@ function App() {
   function logout() {
     setUser(null);
     localStorage.removeItem("orbcommUser");
-    showToast("Signed out.", "success");
     setQueueJobs([]);
     setHistoryItems([]);
     setHistorySearch("");
+    setOrbcommUsername("");
+    setOrbcommPassword("");
+    showToast("Signed out.", "success");
   }
 
   async function loadQueue() {
@@ -174,20 +210,41 @@ function App() {
     }
   }
 
+  function validateOrbcommCredentials() {
+    if (!orbcommUsername.trim()) {
+      showToast("Please enter your ORBCOMM username.", "error");
+      playErrorSound();
+      return false;
+    }
+
+    if (!orbcommPassword.trim()) {
+      showToast("Please enter your ORBCOMM password.", "error");
+      playErrorSound();
+      return false;
+    }
+
+    return true;
+  }
+
   async function queueActivation(scannedValue) {
     const cleaned = normalizeDsn(scannedValue ?? dsn);
-setLastScan(cleaned);
+    setLastScan(cleaned);
+
     if (!cleaned) {
-     showToast("Please scan a DSN first.", "error");
-playErrorSound();
+      showToast("Please scan a DSN first.", "error");
+      playErrorSound();
       inputRef.current?.focus();
       return;
     }
 
     if (!looksLikeOrbcommDsn(cleaned)) {
-     showToast(`That does not look like a valid DSN: ${cleaned}`, "error");
+      showToast(`That does not look like a valid DSN: ${cleaned}`, "error");
       playErrorSound();
       inputRef.current?.focus();
+      return;
+    }
+
+    if (!validateOrbcommCredentials()) {
       return;
     }
 
@@ -199,7 +256,7 @@ playErrorSound();
     );
 
     if (duplicateJob) {
-     showToast(`Device already queued: ${cleaned}`, "error");
+      showToast(`Device already queued: ${cleaned}`, "error");
       playErrorSound();
       inputRef.current?.focus();
       return;
@@ -216,28 +273,33 @@ playErrorSound();
         },
         body: JSON.stringify({
           dsn: cleaned,
-          user: user.username
+          user: user.username,
+          orbcommUser: orbcommUsername.trim(),
+          orbcommPass: orbcommPassword
         })
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-  showToast(data.message || "Queue request failed.", "error");
-  playErrorSound();
-  inputRef.current?.focus();
-  return;
-}
+        showToast(data.message || "Queue request failed.", "error");
+        playErrorSound();
+        inputRef.current?.focus();
+        return;
+      }
 
-     showToast(`Queued activation: ${data.job.dsn}`, "success");
-playSuccessSound();
+      saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
+
+      showToast(`Queued activation: ${data.job.dsn}`, "success");
+      playSuccessSound();
       setDsn("");
       inputRef.current?.focus();
       loadQueue();
       setActiveTab("queue");
     } catch (error) {
       console.error(error);
-showToast("Could not reach the server.", "error");      playErrorSound();
+      showToast("Could not reach the server.", "error");
+      playErrorSound();
       inputRef.current?.focus();
     } finally {
       setSubmitting(false);
@@ -246,34 +308,39 @@ showToast("Could not reach the server.", "error");      playErrorSound();
 
   async function queueDeactivation(scannedValue) {
     const cleaned = normalizeDsn(scannedValue ?? dsn);
+    setLastScan(cleaned);
 
     if (!cleaned) {
-  showToast("Please scan a DSN first.", "error");
-  playErrorSound();
-  inputRef.current?.focus();
-  return;
-}
+      showToast("Please scan a DSN first.", "error");
+      playErrorSound();
+      inputRef.current?.focus();
+      return;
+    }
 
-if (!looksLikeOrbcommDsn(cleaned)) {
-  showToast(`That does not look like a valid DSN: ${cleaned}`, "error");
-  playErrorSound();
-  inputRef.current?.focus();
-  return;
-}
+    if (!looksLikeOrbcommDsn(cleaned)) {
+      showToast(`That does not look like a valid DSN: ${cleaned}`, "error");
+      playErrorSound();
+      inputRef.current?.focus();
+      return;
+    }
 
-const duplicateJob = queueJobs.find(
-  (job) =>
-    job.dsn === cleaned &&
-    job.type === "deactivate" &&
-    (job.status === "queued" || job.status === "running")
-);
+    if (!validateOrbcommCredentials()) {
+      return;
+    }
 
-if (duplicateJob) {
-  showToast(`Device already queued for deactivation: ${cleaned}`, "error");
-  playErrorSound();
-  inputRef.current?.focus();
-  return;
-}
+    const duplicateJob = queueJobs.find(
+      (job) =>
+        job.dsn === cleaned &&
+        job.type === "deactivate" &&
+        (job.status === "queued" || job.status === "running")
+    );
+
+    if (duplicateJob) {
+      showToast(`Device already queued for deactivation: ${cleaned}`, "error");
+      playErrorSound();
+      inputRef.current?.focus();
+      return;
+    }
 
     try {
       setSubmitting(true);
@@ -286,27 +353,32 @@ if (duplicateJob) {
         },
         body: JSON.stringify({
           dsn: cleaned,
-          user: user.username
+          user: user.username,
+          orbcommUser: orbcommUsername.trim(),
+          orbcommPass: orbcommPassword
         })
       });
 
       const data = await response.json();
 
-     if (!response.ok) {
-  showToast(data.message || "Queue request failed.", "error");
-  playErrorSound();
-  inputRef.current?.focus();
-  return;
-}
+      if (!response.ok) {
+        showToast(data.message || "Queue request failed.", "error");
+        playErrorSound();
+        inputRef.current?.focus();
+        return;
+      }
 
-showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
+      saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
+
+      showToast(`Queued deactivation: ${data.job.dsn}`, "success");
+      playSuccessSound();
       setDsn("");
       inputRef.current?.focus();
       loadQueue();
       setActiveTab("queue");
     } catch (error) {
       console.error(error);
-     showToast("Could not reach the server.", "error");
+      showToast("Could not reach the server.", "error");
       playErrorSound();
       inputRef.current?.focus();
     } finally {
@@ -321,7 +393,7 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
       if (selectedAction === "deactivate") {
         const confirmed = window.confirm("Are you sure you want to DEACTIVATE this device?");
         if (!confirmed) return;
-        queueDeactivation()
+        queueDeactivation();
       } else {
         queueActivation();
       }
@@ -358,6 +430,7 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
     return (
       String(item.dsn || "").toUpperCase().includes(search) ||
       String(item.user || "").toUpperCase().includes(search) ||
+      String(item.orbcommUser || "").toUpperCase().includes(search) ||
       String(item.type || "").toUpperCase().includes(search) ||
       String(item.status || "").toUpperCase().includes(search)
     );
@@ -367,29 +440,29 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
     return (
       <div style={{ padding: 24, fontFamily: "Arial", maxWidth: 420, margin: "40px auto" }}>
         {toast && (
-  <div
-    style={{
-      position: "fixed",
-      top: 20,
-      left: "50%",
-      transform: "translateX(-50%)",
-      padding: "14px 20px",
-      borderRadius: 10,
-      fontSize: 18,
-      fontWeight: "bold",
-      color: "#fff",
-      background: toast.type === "success" ? "#1f7a1f" : "#b00020",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-      zIndex: 9999
-    }}
-  >
-    {toast.message}
-  </div>
-)}
+          <div
+            style={{
+              position: "fixed",
+              top: 20,
+              left: "50%",
+              transform: "translateX(-50%)",
+              padding: "14px 20px",
+              borderRadius: 10,
+              fontSize: 18,
+              fontWeight: "bold",
+              color: "#fff",
+              background: toast.type === "success" ? "#1f7a1f" : "#b00020",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+              zIndex: 9999
+            }}
+          >
+            {toast.message}
+          </div>
+        )}
         <h1 style={{ fontSize: 30, marginBottom: 16 }}>ORBCOMM Sign In</h1>
 
         <input
-          placeholder="Username"
+          placeholder="App Username"
           value={loginUsername}
           onChange={(e) => setLoginUsername(e.target.value)}
           style={{
@@ -402,7 +475,7 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
         />
 
         <input
-          placeholder="Password"
+          placeholder="App Password"
           type="password"
           value={loginPassword}
           onChange={(e) => setLoginPassword(e.target.value)}
@@ -430,25 +503,25 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
   return (
     <div style={{ padding: 24, fontFamily: "Arial", maxWidth: 560, margin: "0 auto" }}>
       {toast && (
-  <div
-    style={{
-      position: "fixed",
-      top: 20,
-      left: "50%",
-      transform: "translateX(-50%)",
-      padding: "14px 20px",
-      borderRadius: 10,
-      fontSize: 18,
-      fontWeight: "bold",
-      color: "#fff",
-      background: toast.type === "success" ? "#1f7a1f" : "#b00020",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-      zIndex: 9999
-    }}
-  >
-    {toast.message}
-  </div>
-)}
+        <div
+          style={{
+            position: "fixed",
+            top: 20,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "14px 20px",
+            borderRadius: 10,
+            fontSize: 18,
+            fontWeight: "bold",
+            color: "#fff",
+            background: toast.type === "success" ? "#1f7a1f" : "#b00020",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+            zIndex: 9999
+          }}
+        >
+          {toast.message}
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <h1 style={{ fontSize: 34, margin: 0 }}>ORBCOMM Queue</h1>
         <button onClick={logout} style={{ padding: "10px 14px" }}>
@@ -463,6 +536,44 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
       <p style={{ marginBottom: 16 }}>
         Tap the box below, then scan terminals with the Netum scanner.
       </p>
+
+      <div style={{ marginBottom: 16 }}>
+        <input
+          placeholder="Your ORBCOMM Username"
+          value={orbcommUsername}
+          onChange={(e) => setOrbcommUsername(e.target.value)}
+          onBlur={() => {
+            if (user && orbcommUsername.trim()) {
+              saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
+            }
+          }}
+          style={{
+            fontSize: 16,
+            padding: 10,
+            width: "100%",
+            boxSizing: "border-box",
+            marginBottom: 8
+          }}
+        />
+
+        <input
+          placeholder="Your ORBCOMM Password"
+          type="password"
+          value={orbcommPassword}
+          onChange={(e) => setOrbcommPassword(e.target.value)}
+          onBlur={() => {
+            if (user && orbcommUsername.trim() && orbcommPassword.trim()) {
+              saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
+            }
+          }}
+          style={{
+            fontSize: 16,
+            padding: 10,
+            width: "100%",
+            boxSizing: "border-box"
+          }}
+        />
+      </div>
 
       <div
         style={{
@@ -488,13 +599,15 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
         Current action: <strong>{selectedAction === "activate" ? "Activate" : "Deactivate"}</strong>
       </p>
 
-<div style={{
-  fontSize: 20,
-  marginBottom: 12,
-  fontWeight: "bold"
-}}>
-  Last scanned: {lastScan || "—"}
-</div>
+      <div
+        style={{
+          fontSize: 20,
+          marginBottom: 12,
+          fontWeight: "bold"
+        }}
+      >
+        Last scanned: {lastScan || "—"}
+      </div>
 
       <input
         ref={inputRef}
@@ -563,7 +676,6 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
         </button>
       </div>
 
-
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 20, marginBottom: 20 }}>
         <button
           onClick={() => setActiveTab("queue")}
@@ -617,6 +729,7 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
                   >
                     <div><strong>DSN:</strong> {job.dsn}</div>
                     <div><strong>User:</strong> {job.user}</div>
+                    <div><strong>ORBCOMM User:</strong> {job.orbcommUser || "—"}</div>
                     <div><strong>Type:</strong> {typeLabel(job.type)}</div>
                     <div>
                       <strong>Status:</strong>{" "}
@@ -665,7 +778,7 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
           </div>
 
           <input
-            placeholder="Search by DSN, user, type, or status"
+            placeholder="Search by DSN, user, ORBCOMM user, type, or status"
             value={historySearch}
             onChange={(e) => setHistorySearch(e.target.value)}
             style={{
@@ -693,6 +806,7 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
                 >
                   <div><strong>DSN:</strong> {item.dsn}</div>
                   <div><strong>User:</strong> {item.user || "—"}</div>
+                  <div><strong>ORBCOMM User:</strong> {item.orbcommUser || "—"}</div>
                   <div><strong>Type:</strong> {typeLabel(item.type)}</div>
                   <div>
                     <strong>Status:</strong>{" "}
@@ -716,10 +830,12 @@ showToast(`Queued deactivation: ${data.job.dsn}`, "success");playSuccessSound();
 
       <div style={{ marginTop: 20, color: "#555" }}>
         <p><strong>Scanner workflow:</strong></p>
-        <p>1. Tap in the DSN box</p>
-        <p>2. Scan the ORBCOMM barcode</p>
-        <p>3. Scan the barcode — activation submits automatically</p>
-        <p>4. Deactivation asks for confirmation</p>
+        <p>1. Sign into the app</p>
+        <p>2. Your ORBCOMM credentials auto-fill if already saved for your app username</p>
+        <p>3. Tap in the DSN box</p>
+        <p>4. Scan the ORBCOMM barcode</p>
+        <p>5. Activation submits automatically</p>
+        <p>6. Deactivation asks for confirmation</p>
       </div>
     </div>
   );
