@@ -13,13 +13,15 @@ function App() {
   const [selectedAction, setSelectedAction] = useState("activate");
   const [historySearch, setHistorySearch] = useState("");
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem("orbcommUser");
+    const saved = localStorage.getItem("orbcommControlUser");
     return saved ? JSON.parse(saved) : null;
   });
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [orbcommUsername, setOrbcommUsername] = useState("");
-  const [orbcommPassword, setOrbcommPassword] = useState("");
+  const [orbcommUsername, setOrbcommUsername] = useState(() => {
+    return localStorage.getItem("orbcommControlUsername") || "";
+  });
+  const [orbcommPassword, setOrbcommPassword] = useState(() => {
+    return localStorage.getItem("orbcommControlPassword") || "";
+  });
   const [toast, setToast] = useState(null);
   const [lastScan, setLastScan] = useState("");
   const inputRef = useRef(null);
@@ -30,7 +32,6 @@ function App() {
     inputRef.current?.focus();
     loadQueue();
     loadHistory();
-    loadSavedOrbcommCreds(user.username);
 
     const interval = setInterval(() => {
       loadQueue();
@@ -39,36 +40,6 @@ function App() {
 
     return () => clearInterval(interval);
   }, [user]);
-
-  function getSavedCredsMap() {
-    try {
-      return JSON.parse(localStorage.getItem("orbcommCredsByAppUser") || "{}");
-    } catch {
-      return {};
-    }
-  }
-
-  function saveOrbcommCredsForUser(appUsername, orbUser, orbPass) {
-    const credsMap = getSavedCredsMap();
-    credsMap[appUsername] = {
-      orbcommUsername: orbUser,
-      orbcommPassword: orbPass
-    };
-    localStorage.setItem("orbcommCredsByAppUser", JSON.stringify(credsMap));
-  }
-
-  function loadSavedOrbcommCreds(appUsername) {
-    const credsMap = getSavedCredsMap();
-    const saved = credsMap[appUsername];
-
-    if (saved) {
-      setOrbcommUsername(saved.orbcommUsername || "");
-      setOrbcommPassword(saved.orbcommPassword || "");
-    } else {
-      setOrbcommUsername("");
-      setOrbcommPassword("");
-    }
-  }
 
   function normalizeDsn(value) {
     return String(value || "").trim().toUpperCase();
@@ -137,50 +108,42 @@ function App() {
     }, 2000);
   }
 
-  async function login() {
-    try {
-      setMessage("Signing in...");
+  function signInWithOrbcomm() {
+    const cleanedUsername = orbcommUsername.trim();
+    const cleanedPassword = orbcommPassword;
 
-      const response = await fetch(`${API_BASE}/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          username: loginUsername,
-          password: loginPassword
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        showToast(data.message || "Login failed.", "error");
-        playErrorSound();
-        return;
-      }
-
-      setUser(data.user);
-      localStorage.setItem("orbcommUser", JSON.stringify(data.user));
-      setLoginUsername("");
-      setLoginPassword("");
-      showToast(`Signed in as ${data.user.fullName}`, "success");
-      playSuccessSound();
-    } catch (error) {
-      console.error(error);
-      showToast("Could not reach the server.", "error");
+    if (!cleanedUsername) {
+      showToast("Please enter your ORBCOMM username.", "error");
       playErrorSound();
+      return;
     }
+
+    if (!cleanedPassword.trim()) {
+      showToast("Please enter your ORBCOMM password.", "error");
+      playErrorSound();
+      return;
+    }
+
+    const orbcommUser = {
+      username: cleanedUsername,
+      fullName: cleanedUsername
+    };
+
+    setUser(orbcommUser);
+    localStorage.setItem("orbcommControlUser", JSON.stringify(orbcommUser));
+    localStorage.setItem("orbcommControlUsername", cleanedUsername);
+    localStorage.setItem("orbcommControlPassword", cleanedPassword);
+
+    showToast(`Signed in as ${cleanedUsername}`, "success");
+    playSuccessSound();
   }
 
   function logout() {
     setUser(null);
-    localStorage.removeItem("orbcommUser");
+    localStorage.removeItem("orbcommControlUser");
     setQueueJobs([]);
     setHistoryItems([]);
     setHistorySearch("");
-    setOrbcommUsername("");
-    setOrbcommPassword("");
     showToast("Signed out.", "success");
   }
 
@@ -288,7 +251,8 @@ function App() {
         return;
       }
 
-      saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
+      localStorage.setItem("orbcommControlUsername", orbcommUsername.trim());
+      localStorage.setItem("orbcommControlPassword", orbcommPassword);
 
       showToast(`Queued activation: ${data.job.dsn}`, "success");
       playSuccessSound();
@@ -368,7 +332,8 @@ function App() {
         return;
       }
 
-      saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
+      localStorage.setItem("orbcommControlUsername", orbcommUsername.trim());
+      localStorage.setItem("orbcommControlPassword", orbcommPassword);
 
       showToast(`Queued deactivation: ${data.job.dsn}`, "success");
       playSuccessSound();
@@ -389,6 +354,11 @@ function App() {
   function handleKeyDown(e) {
     if (e.key === "Enter") {
       e.preventDefault();
+
+      if (!user) {
+        signInWithOrbcomm();
+        return;
+      }
 
       if (selectedAction === "deactivate") {
         const confirmed = window.confirm("Are you sure you want to DEACTIVATE this device?");
@@ -459,12 +429,14 @@ function App() {
             {toast.message}
           </div>
         )}
+
         <h1 style={{ fontSize: 30, marginBottom: 16 }}>ORBCOMM Sign In</h1>
 
         <input
-          placeholder="App Username"
-          value={loginUsername}
-          onChange={(e) => setLoginUsername(e.target.value)}
+          placeholder="ORBCOMM Username"
+          value={orbcommUsername}
+          onChange={(e) => setOrbcommUsername(e.target.value)}
+          onKeyDown={handleKeyDown}
           style={{
             fontSize: 18,
             padding: 12,
@@ -475,10 +447,11 @@ function App() {
         />
 
         <input
-          placeholder="App Password"
+          placeholder="ORBCOMM Password"
           type="password"
-          value={loginPassword}
-          onChange={(e) => setLoginPassword(e.target.value)}
+          value={orbcommPassword}
+          onChange={(e) => setOrbcommPassword(e.target.value)}
+          onKeyDown={handleKeyDown}
           style={{
             fontSize: 18,
             padding: 12,
@@ -489,7 +462,7 @@ function App() {
         />
 
         <button
-          onClick={login}
+          onClick={signInWithOrbcomm}
           style={{ fontSize: 18, padding: "12px 18px", width: "100%" }}
         >
           Sign In
@@ -530,50 +503,12 @@ function App() {
       </div>
 
       <p style={{ marginBottom: 6 }}>
-        Signed in as <strong>{user.fullName}</strong> ({user.username})
+        Signed in as <strong>{user.fullName}</strong>
       </p>
 
       <p style={{ marginBottom: 16 }}>
         Tap the box below, then scan terminals with the Netum scanner.
       </p>
-
-      <div style={{ marginBottom: 16 }}>
-        <input
-          placeholder="Your ORBCOMM Username"
-          value={orbcommUsername}
-          onChange={(e) => setOrbcommUsername(e.target.value)}
-          onBlur={() => {
-            if (user && orbcommUsername.trim()) {
-              saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
-            }
-          }}
-          style={{
-            fontSize: 16,
-            padding: 10,
-            width: "100%",
-            boxSizing: "border-box",
-            marginBottom: 8
-          }}
-        />
-
-        <input
-          placeholder="Your ORBCOMM Password"
-          type="password"
-          value={orbcommPassword}
-          onChange={(e) => setOrbcommPassword(e.target.value)}
-          onBlur={() => {
-            if (user && orbcommUsername.trim() && orbcommPassword.trim()) {
-              saveOrbcommCredsForUser(user.username, orbcommUsername.trim(), orbcommPassword);
-            }
-          }}
-          style={{
-            fontSize: 16,
-            padding: 10,
-            width: "100%",
-            boxSizing: "border-box"
-          }}
-        />
-      </div>
 
       <div
         style={{
@@ -830,12 +765,11 @@ function App() {
 
       <div style={{ marginTop: 20, color: "#555" }}>
         <p><strong>Scanner workflow:</strong></p>
-        <p>1. Sign into the app</p>
-        <p>2. Your ORBCOMM credentials auto-fill if already saved for your app username</p>
-        <p>3. Tap in the DSN box</p>
-        <p>4. Scan the ORBCOMM barcode</p>
-        <p>5. Activation submits automatically</p>
-        <p>6. Deactivation asks for confirmation</p>
+        <p>1. Sign in with your ORBCOMM username and password</p>
+        <p>2. Tap in the DSN box</p>
+        <p>3. Scan the ORBCOMM barcode</p>
+        <p>4. Activation submits automatically</p>
+        <p>5. Deactivation asks for confirmation</p>
       </div>
     </div>
   );
