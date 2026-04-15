@@ -24,6 +24,7 @@ function App() {
   });
   const [toast, setToast] = useState(null);
   const [lastScan, setLastScan] = useState("");
+  const [autoLoginTried, setAutoLoginTried] = useState(false);
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -40,6 +41,25 @@ function App() {
 
     return () => clearInterval(interval);
   }, [user]);
+
+  useEffect(() => {
+    if (user || autoLoginTried) return;
+
+    const savedUsername = (localStorage.getItem("orbcommControlUsername") || "").trim();
+    const savedPassword = localStorage.getItem("orbcommControlPassword") || "";
+
+    if (savedUsername && savedPassword.trim()) {
+      const orbcommUser = {
+        username: savedUsername,
+        fullName: savedUsername
+      };
+
+      setUser(orbcommUser);
+      localStorage.setItem("orbcommControlUser", JSON.stringify(orbcommUser));
+    }
+
+    setAutoLoginTried(true);
+  }, [user, autoLoginTried]);
 
   function normalizeDsn(value) {
     return String(value || "").trim().toUpperCase();
@@ -108,7 +128,7 @@ function App() {
     }, 2000);
   }
 
-  function signInWithOrbcomm() {
+  function signInWithOrbcomm(showSuccessToast = true) {
     const cleanedUsername = orbcommUsername.trim();
     const cleanedPassword = orbcommPassword;
 
@@ -134,8 +154,10 @@ function App() {
     localStorage.setItem("orbcommControlUsername", cleanedUsername);
     localStorage.setItem("orbcommControlPassword", cleanedPassword);
 
-    showToast(`Signed in as ${cleanedUsername}`, "success");
-    playSuccessSound();
+    if (showSuccessToast) {
+      showToast(`Signed in as ${cleanedUsername}`, "success");
+      playSuccessSound();
+    }
   }
 
   function logout() {
@@ -145,6 +167,19 @@ function App() {
     setHistoryItems([]);
     setHistorySearch("");
     showToast("Signed out.", "success");
+  }
+
+  function clearSavedCredentials() {
+    localStorage.removeItem("orbcommControlUser");
+    localStorage.removeItem("orbcommControlUsername");
+    localStorage.removeItem("orbcommControlPassword");
+    setUser(null);
+    setOrbcommUsername("");
+    setOrbcommPassword("");
+    setQueueJobs([]);
+    setHistoryItems([]);
+    setHistorySearch("");
+    showToast("Saved ORBCOMM credentials cleared.", "success");
   }
 
   async function loadQueue() {
@@ -462,10 +497,17 @@ function App() {
         />
 
         <button
-          onClick={signInWithOrbcomm}
-          style={{ fontSize: 18, padding: "12px 18px", width: "100%" }}
+          onClick={() => signInWithOrbcomm()}
+          style={{ fontSize: 18, padding: "12px 18px", width: "100%", marginBottom: 10 }}
         >
           Sign In
+        </button>
+
+        <button
+          onClick={clearSavedCredentials}
+          style={{ fontSize: 16, padding: "10px 18px", width: "100%" }}
+        >
+          Clear Saved Credentials
         </button>
 
         {message ? <p style={{ marginTop: 16 }}>{message}</p> : null}
@@ -765,7 +807,7 @@ function App() {
 
       <div style={{ marginTop: 20, color: "#555" }}>
         <p><strong>Scanner workflow:</strong></p>
-        <p>1. Sign in with your ORBCOMM username and password</p>
+        <p>1. App auto-signs in if saved ORBCOMM credentials exist</p>
         <p>2. Tap in the DSN box</p>
         <p>3. Scan the ORBCOMM barcode</p>
         <p>4. Activation submits automatically</p>
