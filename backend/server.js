@@ -67,6 +67,7 @@ app.get("/history/export", (req, res) => {
     "id",
     "dsn",
     "user",
+    "orbcommUser",
     "type",
     "status",
     "createdAt",
@@ -80,6 +81,7 @@ app.get("/history/export", (req, res) => {
       item.id,
       item.dsn,
       item.user,
+      item.orbcommUser,
       item.type,
       item.status,
       item.createdAt,
@@ -140,7 +142,7 @@ app.post("/login", (req, res) => {
 });
 
 app.post("/queue/activate", (req, res) => {
-  const { dsn, user } = req.body;
+  const { dsn, user, orbcommUser, orbcommPass } = req.body;
 
   if (!dsn) {
     return res.status(400).json({
@@ -156,7 +158,23 @@ app.post("/queue/activate", (req, res) => {
     });
   }
 
+  if (!orbcommUser) {
+    return res.status(400).json({
+      success: false,
+      message: "ORBCOMM username is required"
+    });
+  }
+
+  if (!orbcommPass) {
+    return res.status(400).json({
+      success: false,
+      message: "ORBCOMM password is required"
+    });
+  }
+
   const normalizedDsn = String(dsn).trim().toUpperCase();
+  const normalizedOrbcommUser = String(orbcommUser).trim();
+  const normalizedOrbcommPass = String(orbcommPass).trim();
 
   const existingJob = activationQueue.find(
     (job) =>
@@ -177,6 +195,8 @@ app.post("/queue/activate", (req, res) => {
     id: nextJobId++,
     dsn: normalizedDsn,
     user,
+    orbcommUser: normalizedOrbcommUser,
+    orbcommPass: normalizedOrbcommPass,
     type: "activate",
     status: "queued",
     createdAt: new Date().toISOString(),
@@ -195,7 +215,7 @@ app.post("/queue/activate", (req, res) => {
 });
 
 app.post("/queue/deactivate", (req, res) => {
-  const { dsn, user } = req.body;
+  const { dsn, user, orbcommUser, orbcommPass } = req.body;
 
   if (!dsn) {
     return res.status(400).json({
@@ -211,7 +231,23 @@ app.post("/queue/deactivate", (req, res) => {
     });
   }
 
+  if (!orbcommUser) {
+    return res.status(400).json({
+      success: false,
+      message: "ORBCOMM username is required"
+    });
+  }
+
+  if (!orbcommPass) {
+    return res.status(400).json({
+      success: false,
+      message: "ORBCOMM password is required"
+    });
+  }
+
   const normalizedDsn = String(dsn).trim().toUpperCase();
+  const normalizedOrbcommUser = String(orbcommUser).trim();
+  const normalizedOrbcommPass = String(orbcommPass).trim();
 
   const existingJob = activationQueue.find(
     (job) =>
@@ -232,6 +268,8 @@ app.post("/queue/deactivate", (req, res) => {
     id: nextJobId++,
     dsn: normalizedDsn,
     user,
+    orbcommUser: normalizedOrbcommUser,
+    orbcommPass: normalizedOrbcommPass,
     type: "deactivate",
     status: "queued",
     createdAt: new Date().toISOString(),
@@ -402,6 +440,7 @@ function appendHistory(job) {
     id: job.id,
     dsn: job.dsn,
     user: job.user,
+    orbcommUser: job.orbcommUser || "",
     type: job.type,
     status: job.status,
     createdAt: job.createdAt,
